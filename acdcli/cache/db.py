@@ -34,7 +34,7 @@ class NodeCache(QueryMixin, SyncMixin):
         :param check: type of the integrity check to perform"""
 
         logger.info('Initializing cache with path "%s".' % os.path.realpath(path))
-        db_path = os.path.join(path, NodeCache._DB_FILENAME)
+        self.db_path = os.path.join(path, NodeCache._DB_FILENAME)
 
         # doesn't seem to work on Windows
         from ctypes import util, CDLL
@@ -50,7 +50,7 @@ class NodeCache(QueryMixin, SyncMixin):
         except (OSError, AttributeError):
             logger.info('Skipping sqlite thread-safety test.')
 
-        self.engine = create_engine('sqlite:///%s' % db_path,
+        self.engine = create_engine('sqlite:///%s' % self.db_path,
                                     connect_args={'check_same_thread': False})
 
         # register the named function 'REGEXP' with SQLite
@@ -58,7 +58,7 @@ class NodeCache(QueryMixin, SyncMixin):
         listen(self.engine, 'begin',
                lambda conn: conn.connection.create_function('REGEXP', 2, _regex_match))
 
-        initialized = os.path.exists(db_path)
+        initialized = os.path.exists(self.db_path)
         if initialized:
             try:
                 initialized = self.engine.has_table(schema.Metadate.__tablename__) and \

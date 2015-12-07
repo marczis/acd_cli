@@ -15,6 +15,7 @@ from acdcli.bundled.fuse import FUSE, FuseOSError as FuseError, Operations
 from acdcli.api.common import RequestError
 from acdcli.api.content import CHUNK_SIZE as CHUNK_SZ
 from acdcli.utils.time import *
+from acdcli.cache.raw_query import RawQuery
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,7 @@ class ACDFuse(LoggingMixIn, Operations):
         :param kwargs: cache (NodeCache), acd_client (ACDClient), autosync (partial)"""
 
         self.cache = kwargs['cache']
+        self.fast_query = RawQuery(self.cache.db_path)
         self.acd_client = kwargs['acd_client']
         autosync = kwargs['autosync']
 
@@ -369,8 +371,6 @@ class ACDFuse(LoggingMixIn, Operations):
         """collection of files opened for reading"""
         self.wp = WriteProxy(self.acd_client, self.cache)
         """collection of files opened for writing"""
-        # self.pc = PathCache(self.cache)
-
         self.total, _ = self.acd_client.fs_sizes()
         """total disk space"""
         self.free = self.total - self.cache.calculate_usage()
@@ -394,33 +394,33 @@ class ACDFuse(LoggingMixIn, Operations):
 
         :raises: FuseOSError if path is not a node or path is not a folder"""
 
-        node, _ = self.cache.resolve(path, trash=False)
+        node = self.fast_query.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
-        if not node.is_folder():
+        if not node.type == 'folder':
             raise FuseOSError(errno.ENOTDIR)
 
-        return [_ for _ in ['.', '..'] + [c.name for c in node.available_children()]]
+        return [_ for _ in ['.', '..'] + [c for c in self.fast_query.children(node.id)]]
 
     def getattr(self, path, fh=None) -> dict:
         """Creates a stat-like attribute dict, see :manpage:`stat(2)`.
         Calculates correct number of links for folders if :attr:`nlinks` is set."""
 
-        node, _ = self.cache.resolve(path, trash=False)
+        node = self.fast_query.resolve(path)
         if not node:
             raise FuseOSError(errno.ENOENT)
 
         times = dict(st_atime=time(),
-                     st_mtime=datetime_to_timestamp(node.modified),
-                     st_ctime=datetime_to_timestamp(node.created))
+                     st_mtime=datetime.strptime(node.modified, '%Y-%m-%d %H:%M:%S.%f+00:00').timestamp(),
+                     st_ctime=datetime.strptime(node.created, '%Y-%m-%d %H:%M:%S.%f+00:00').timestamp())
 
-        if node.is_folder():
+        if node.type == 'folder':
             return dict(st_mode=stat.S_IFDIR | 0o0777,
-                        st_nlink=node.nlinks if self.nlinks else 1, **times)
-        if node.is_file():
+                        st_nlink=1 if self.nlinks else 1, **times)
+        if node.type == 'file':
             return dict(st_mode=stat.S_IFREG | 0o0666,
-                        st_nlink=node.nlinks if self.nlinks else 1,
-                        st_size=node.size, **times)
+                        st_nlink=1 if self.nlinks else 1,
+                        st_size=0, **times)
 
     def listxattr(self, path) -> 'List[str]':
         """Lists extended node attributes (names)."""
