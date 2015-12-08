@@ -411,30 +411,35 @@ class ACDFuse(LoggingMixIn, Operations):
             raise FuseOSError(errno.ENOENT)
 
         times = dict(st_atime=time(),
-                     st_mtime=datetime.strptime(node.modified, '%Y-%m-%d %H:%M:%S.%f+00:00').timestamp(),
-                     st_ctime=datetime.strptime(node.created, '%Y-%m-%d %H:%M:%S.%f+00:00').timestamp())
+                     st_mtime=node.modified.timestamp(),
+                     st_ctime=node.created.timestamp())
 
-        if node.type == 'folder':
+        if node.is_folder:
             return dict(st_mode=stat.S_IFDIR | 0o0777,
-                        st_nlink=1 if self.nlinks else 1, **times)
-        if node.type == 'file':
+                        st_nlink=self.fast_query.num_children(node.id) if self.nlinks else 1,
+                        **times)
+        elif node.is_file:
             return dict(st_mode=stat.S_IFREG | 0o0666,
-                        st_nlink=1 if self.nlinks else 1,
-                        st_size=0, **times)
+                        st_nlink=self.fast_query.num_parents(node.id) if self.nlinks else 1,
+                        st_size=node.size,
+                        **times)
 
     def listxattr(self, path) -> 'List[str]':
         """Lists extended node attributes (names)."""
 
-        node, _ = self.cache.resolve(path, trash=False)
-        if node.is_file():
+        node = self.fast_query.resolve(path)
+        if node.is_file:
             return self.FXATTRS.vars()
-        elif node.is_folder():
+        elif node.is_folder:
             return self.XATTRS.vars()
 
     def getxattr(self, path, name, position=0) -> bytes:
         """Gets value of extended attribute ``name``."""
 
-        node, _ = self.cache.resolve(path, trash=False)
+        if name not in self.XATTRS.vars() and name not in self.FXATTRS.vars():
+            raise FuseOSError(errno.ENODATA)
+
+        node = self.fast_query.resolve(path)
 
         if name == self.XATTRS.ID:
             return bytes(node.id, encoding='utf-8')

@@ -1,30 +1,74 @@
 import sqlite3
-from collections import namedtuple
+from datetime import datetime
+
+
+def datetime_from_string(dt: str) -> datetime:
+    try:
+        dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f+00:00')
+    except ValueError:
+        dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S+00:00')
+    return dt
+
 
 ROOT_ID_SQL = 'SELECT id FROM nodes WHERE name IS NULL AND type == "folder"'
 CHILDREN_OF_SQL = """SELECT n.name FROM nodes n
                 JOIN parentage p ON n.id = p.child
                 WHERE p.parent = (?) AND n.status == 'AVAILABLE'
                 ORDER BY n.name"""
-CHILD_OF_SQL = """SELECT n.* FROM nodes n
+NUM_CHILDREN_SQL = """SELECT COUNT(n.id) FROM nodes n
+                    JOIN parentage p ON n.id = p.child
+                    WHERE p.parent = (?) AND n.status == 'AVAILABLE'"""
+NUM_PARENTS_SQL = """SELECT COUNT(n.id) FROM nodes n
+                    JOIN parentage p ON n.id = p.parent
+                    WHERE p.child = (?) AND n.status == 'AVAILABLE'"""
+CHILD_OF_SQL = """SELECT n.*, f.md5 AS md5, f.size AS size FROM nodes n
                   JOIN parentage p ON n.id = p.child
+                  LEFT OUTER JOIN files f ON n.id = f.id
                   WHERE n.name = (?) AND p.parent = (?) AND n.status == 'AVAILABLE'"""
 NODE_BY_ID_SQL = 'SELECT * FROM nodes WHERE id = (?)'
 
-Node = namedtuple('Node',
-                  ['id', 'type', 'name', 'description', 'created', 'modified', 'updated', 'status'])
 
+class Node(object):
+    def __init__(self, row):
+        self.id = row['id']
+        self.type = row['type']
+        self.name = row['name']
+        self.description = row['description']
+        self.cre = row['created']
+        self.mod = row['modified']
+        self.updated = row['updated']
+        self.status = row['status']
 
-def namedtuple_factory(cursor: sqlite3.Cursor, row: sqlite3.Row):
-    """Namedtuple row factory for sqlite3"""
-    fields = [col[0] for col in cursor.description]
-    Row = namedtuple("Row", fields)
-    return Row(*row)
+        try:
+            self.md5 = row['md5']
+        except IndexError:
+            self.md5 = None
+        try:
+            self.size = row['size']
+        except IndexError:
+            self.size = 0
+
+    @property
+    def is_folder(self):
+        return self.type == 'folder'
+
+    @property
+    def is_file(self):
+        return self.type == 'file'
+
+    @property
+    def created(self):
+        return datetime_from_string(self.cre)
+
+    @property
+    def modified(self):
+        return datetime_from_string(self.mod)
 
 
 def create_conn(path: str) -> sqlite3.Connection:
     c = sqlite3.connect(path, timeout=60)
     # c.row_factory = namedtuple_factory
+    c.row_factory = sqlite3.Row # allow dict-like access on rows with col name
     return c
 
 
@@ -60,14 +104,14 @@ def resolve(conn: sqlite3.Connection, path: str, root_id: str) -> tuple:
             return
         if i + 1 == segments.__len__():
             return r
-        if r[1] == 'folder':
+        if r['type'] == 'folder':
             parent = r[0]
             continue
         else:
             return
 
 
-def children(conn: sqlite3.Connection, id: str) -> sqlite3.Cursor:
+def list_children(conn: sqlite3.Connection, id: str) -> list:
     c = conn.cursor()
     c.execute(CHILDREN_OF_SQL, [id])
     kids = []
@@ -77,6 +121,22 @@ def children(conn: sqlite3.Connection, id: str) -> sqlite3.Cursor:
         row = c.fetchone()
     c.close()
     return kids
+
+
+def num_children(conn: sqlite3.Connection, id: str) -> int:
+    c = conn.cursor()
+    c.execute(NUM_CHILDREN_SQL, [id])
+    num = c.fetchone()[0]
+    c.close()
+    return num
+
+
+def num_parents(conn: sqlite3.Connection, id: str) -> int:
+    c = conn.cursor()
+    c.execute(NUM_PARENTS_SQL, [id])
+    num = c.fetchone()[0]
+    c.close()
+    return num
 
 
 class RawQuery(object):
@@ -92,10 +152,22 @@ class RawQuery(object):
         conn.close()
         if not node:
             return node
-        return Node(*node)
+        return Node(node)
 
     def children(self, folder_id):
         conn = create_conn(self.db_path)
-        kids = children(conn, folder_id)
+        kids = list_children(conn, folder_id)
         conn.close()
         return kids
+
+    def num_children(self, folder_id):
+        conn = create_conn(self.db_path)
+        num = num_children(conn, folder_id)
+        conn.close()
+        return num
+
+    def num_parents(self, node_id):
+        conn = create_conn(self.db_path)
+        num = num_parents(conn, node_id)
+        conn.close()
+        return num
