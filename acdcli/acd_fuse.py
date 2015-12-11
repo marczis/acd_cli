@@ -480,12 +480,12 @@ class ACDFuse(LoggingMixIn, Operations):
 
         name = os.path.basename(path)
         ppath = os.path.dirname(path)
-        pid = self.cache.resolve_path(ppath)
-        if not pid:
+        p = self.cache.resolve(ppath)
+        if not p:
             raise FuseOSError(errno.ENOTDIR)
 
         try:
-            r = self.acd_client.create_folder(name, pid)
+            r = self.acd_client.create_folder(name, p.id)
         except RequestError as e:
             FuseOSError.convert(e)
         else:
@@ -493,12 +493,10 @@ class ACDFuse(LoggingMixIn, Operations):
 
     def _trash(self, path):
         logger.debug('trash %s' % path)
-        node, parent = self.cache.resolve(path, False)
+        node = self.cache.resolve(path, False)
 
         if not node:  # or not parent:
             raise FuseOSError(errno.ENOENT)
-
-        logger.debug('%s %s' % (node, parent))
 
         try:
             # if len(node.parents) > 1:
@@ -526,12 +524,12 @@ class ACDFuse(LoggingMixIn, Operations):
 
         name = os.path.basename(path)
         ppath = os.path.dirname(path)
-        pid = self.cache.resolve(ppath, False)
-        if not pid:
+        p = self.cache.resolve(ppath, False)
+        if not p:
             raise FuseOSError(errno.ENOTDIR)
 
         try:
-            r = self.acd_client.create_file(name, pid)
+            r = self.acd_client.create_file(name, p.id)
             self.cache.insert_node(r)
         except RequestError as e:
             FuseOSError.convert(e)
@@ -550,17 +548,16 @@ class ACDFuse(LoggingMixIn, Operations):
         if old == new:
             return
 
-        id = self.cache.resolve(old, False)
-        if not id:
+        node = self.cache.resolve(old, False)
+        if not node:
             raise FuseOSError(errno.ENOENT)
 
         new_bn, new_dn = os.path.basename(new), os.path.dirname(new)
         old_bn, old_dn = os.path.basename(old), os.path.dirname(old)
 
-        existing_id = self.cache.resolve(new, False)
-        if existing_id:
-            en = self.cache.get_node(existing_id)
-            if en and en.is_file():
+        existing = self.cache.resolve(new, False)
+        if existing:
+            if existing.is_file:
                 self._trash(new)
             else:
                 raise FuseOSError(errno.EEXIST)
@@ -570,10 +567,10 @@ class ACDFuse(LoggingMixIn, Operations):
 
         if new_dn != old_dn:
             # odir_id = self.cache.resolve_path(old_dn, False)
-            ndir_id = self.cache.resolve(new_dn, False)
-            if not ndir_id:
+            ndir = self.cache.resolve(new_dn, False)
+            if not ndir:
                 raise FuseOSError(errno.ENOTDIR)
-            self._move(id, ndir_id)
+            self._move(node.id, ndir.id)
 
     def _rename(self, id, name):
         try:
