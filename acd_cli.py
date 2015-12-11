@@ -19,7 +19,7 @@ from pkg_resources import iter_entry_points
 import acdcli
 from acdcli.api import client
 from acdcli.api.common import RequestError, is_valid_id
-from acdcli.cache import db, format
+from acdcli.cache import format, db
 from acdcli.utils import hashing, progress
 from acdcli.utils.threading import QueuedLoader
 from acdcli.utils.time import *
@@ -115,13 +115,13 @@ def sync_node_list(full=False) -> 'Union[int, None]':
 
     if full:
         cache.drop_all()
-        cache = db.NodeCache(CACHE_PATH)
+        cache.init()
 
     try:
         for changeset in acd_client.get_changes(checkpoint=cp_, include_purged=bool(cp_)):
             if changeset.reset and not full:
                 cache.drop_all()
-                cache = db.NodeCache(CACHE_PATH)
+                cache.init()
                 full = True
             else:
                 cache.remove_purged(changeset.purged_nodes)
@@ -290,10 +290,10 @@ def traverse_ul_dir(dirs: list, directory: str, parent_id: str, overwr: bool, fo
     short_nm = os.path.basename(real_path)
 
     curr_node = parent.get_child(short_nm)
-    if not curr_node or not curr_node.is_available() or not parent.is_available():
+    if not curr_node or not curr_node.is_available or not parent.is_available:
         try:
             r = acd_client.create_folder(short_nm, parent_id)
-            logger.info('Created folder "%s"' % (parent.full_path() + short_nm))
+            logger.info('Created folder "%s"' % (cache.first_path(parent.id) + short_nm))
             cache.insert_node(r)
             curr_node = cache.get_node(r['id'])
         except RequestError as e:
@@ -302,7 +302,7 @@ def traverse_ul_dir(dirs: list, directory: str, parent_id: str, overwr: bool, fo
             else:
                 logger.error('Error creating remote folder "%s": %s.' % (short_nm, e))
             return ERR_CR_FOLDER
-    elif curr_node.is_file():
+    elif curr_node.is_file:
         logger.error('Cannot create remote folder "%s", '
                      'because a file of the same name already exists.' % short_nm)
         return ERR_CR_FOLDER
@@ -329,15 +329,15 @@ def upload_file(path: str, parent_id: str, overwr: bool, force: bool, dedup: boo
     short_nm = os.path.basename(path)
 
     if dedup and cache.file_size_exists(os.path.getsize(path)):
-        nodes = cache.find_md5(hashing.hash_file(path))
-        nodes = [n for n in format.PathFormatter(nodes)]
+        nodes = cache.find_by_md5(hashing.hash_file(path))
+        nodes = [n for n in cache.path_format(nodes)]
         if len(nodes) > 0:
             # print('Skipping upload of duplicate file "%s".' % short_nm)
             logger.info('Location of duplicates: %s' % nodes)
             pg_handler.done()
             return DUPLICATE
 
-    conflicting_node = cache.conflicting_node(short_nm, parent_id)
+    conflicting_node = cache.get_conflicting_node(short_nm, parent_id)
     file_id = None
     if conflicting_node:
         if conflicting_node.name != short_nm:
@@ -345,7 +345,7 @@ def upload_file(path: str, parent_id: str, overwr: bool, force: bool, dedup: boo
                          % (short_nm, conflicting_node.name))
             return NAME_COLLISION
 
-        if conflicting_node.is_folder():
+        if conflicting_node.is_folder:
             logger.error('Name collision with existing folder '
                          'in the same location: "%s".' % short_nm)
             return NAME_COLLISION
@@ -614,10 +614,9 @@ def delete_everything_action(args: argparse.Namespace):
         print('Deleting directory failed.')
 
 
-@nocache_action
 @offline_action
 def clear_action(args: argparse.Namespace):
-    if not db.remove_db_file(CACHE_PATH):
+    if not cache.drop_all():
         return ERROR_RETVAL
 
 
@@ -629,14 +628,13 @@ def print_version_action(args: argparse.Namespace):
 
 @offline_action
 def tree_action(args: argparse.Namespace):
-    tree = cache.tree(args.node, args.include_trash)
-    if tree is None:
+    node = cache.get_node(args.node)
+    if not node or not node.is_folder:
         logger.critical('Invalid folder.')
         return INVALID_ARG_RETVAL
 
-    tree = format.TreeFormatter(tree)
-    for node in tree:
-        print(node)
+    for line in cache.tree_format(node, args.node_path, args.include_trash):
+        print(line)
 
 
 @nocache_action
@@ -737,7 +735,7 @@ def download_action(args: argparse.Namespace) -> int:
 
 def cat_action(args: argparse.Namespace) -> int:
     n = cache.get_node(args.node)
-    if not n or not n.is_file():
+    if not n or not n.is_file:
         return INVALID_ARG_RETVAL
 
     try:
@@ -751,15 +749,15 @@ def cat_action(args: argparse.Namespace) -> int:
 
 def mkdir(parent, name: str) -> bool:
     """Creates a folder and inserts it into cache upon success."""
-    if parent.is_file():
+    if parent.is_file:
         logger.error('Cannot create directory "%s". Parent is not a folder.' % name)
         return False
 
     parent_id = parent.id
-    cn = cache.conflicting_node(name, parent_id)
+    cn = cache.get_conflicting_node(name, parent_id)
 
     if cn:
-        if cn.is_file():
+        if cn.is_file:
             logger.error('Cannot create directory "%s". A file of that name already exists.' % name)
             return False
 
@@ -842,7 +840,7 @@ def restore_action(args: argparse.Namespace) -> int:
 
 @offline_action
 def resolve_action(args: argparse.Namespace) -> int:
-    node = cache.resolve_path(args.path)
+    node = cache.resolve(args.path)
     if node:
         print(node)
     else:
@@ -851,12 +849,13 @@ def resolve_action(args: argparse.Namespace) -> int:
 
 @offline_action
 def find_action(args: argparse.Namespace):
-    r = cache.find(args.name)
-    r = format.LongIDFormatter(r)
-    for node in r:
-        print(node)
-    if not r:
+    nodes = cache.find_by_name(args.name)
+
+    if not nodes:
         return INVALID_ARG_RETVAL
+
+    for line in cache.long_id_format(nodes):
+        print(line)
 
 
 @offline_action
@@ -864,9 +863,9 @@ def find_md5_action(args: argparse.Namespace) -> int:
     if len(args.md5) != 32:
         logger.critical('Invalid MD5 specified')
         return INVALID_ARG_RETVAL
-    nodes = cache.find_md5(args.md5)
-    for node in format.LongIDFormatter(nodes):
-        print(node)
+    nodes = cache.find_by_md5(args.md5)
+    for line in cache.long_id_format(nodes):
+        print(line)
 
 
 @offline_action
@@ -874,20 +873,18 @@ def find_regex_action(args: argparse.Namespace) -> int:
     try:
         re.compile(args.regex)
     except re.error as e:
-        logger.critical('Invalid regular expression specified')
+        logger.critical('Invalid regular expression specified.')
         return INVALID_ARG_RETVAL
-    r = cache.find_regex(args.regex)
-    r = format.LongIDFormatter(r)
-    for node in r:
+    nodes = cache.find_by_regex(args.regex)
+    for node in cache.long_id_format(nodes):
         print(node)
     return 0
 
 
 @offline_action
 def children_action(args: argparse.Namespace) -> int:
-    nodes = cache.list_children(args.node, args.recursive, args.include_trash)
-    for entry in format.ListFormatter(nodes, recursive=args.recursive, long=args.long,
-                                      size_bytes=args.size_bytes):
+    for entry in cache.ls_format(args.node, '', args.recursive, args.include_trash,
+                                 args.long, args.size_bytes):
         print(entry)
 
 
@@ -895,7 +892,7 @@ def move_action(args: argparse.Namespace) -> int:
     node = cache.get_node(args.child)
     if not node:
         return INVALID_ARG_RETVAL
-    if len(node.parents) > 1:
+    if cache.num_parents(node.id) > 1:
         logger.error('Cannot move node with multiple parents.')
         return ERROR_RETVAL
 
@@ -943,11 +940,6 @@ def metadata_action(args: argparse.Namespace) -> int:
         return INVALID_ARG_RETVAL
 
 
-@offline_action
-def dump_sql_action(args: argparse.Namespace):
-    cache.dump_table_sql()
-
-
 def mount_action(args: argparse.Namespace):
     asp = partial(autosync, args.interval, stop=Event())
 
@@ -974,22 +966,25 @@ def unmount_action(args: argparse.Namespace):
 def resolve_remote_path_args(args: argparse.Namespace, attrs: list, incl_trash: bool = True):
     """In-place replaces certain attributes in Namespace by resolved node ID.
     :param attrs: list of attributes that may be given in absolute path form
-    :param incl_trash: whether to resolve trashed files
-    """
+    :param incl_trash: whether to resolve trashed files"""
+
     for id_attr in attrs:
         if hasattr(args, id_attr):
             val = getattr(args, id_attr)
             if not val:
                 continue
             if '/' in val:
-                v = cache.resolve_path(val, trash=incl_trash)
+                val = '/' + '/'.join(list(filter(bool, val.split('/'))))
+                v = cache.resolve(val, trash=incl_trash)
                 if not v:
                     logger.critical('Could not resolve path "%s".' % val)
                     sys.exit(INVALID_ARG_RETVAL)
                 logger.info('Resolved "%s" to "%s"' % (val, v))
-                setattr(args, id_attr, v)
+                setattr(args, id_attr, v.id)
                 setattr(args, id_attr + '_path', val)
-            elif not is_valid_id(val):
+            elif is_valid_id(val):
+                setattr(args, id_attr + '_path', cache.first_path(val))
+            else:
                 logger.critical('Invalid ID format: "%s".' % val)
                 sys.exit(INVALID_ARG_RETVAL)
 
@@ -1085,7 +1080,7 @@ def check_cache() -> bool:
 
     :returns: whether a root node was found"""
 
-    if not cache.get_root_node():
+    if not cache.resolve('/'):
         logger.critical('Root node not found. Please sync.')
         return False
 
@@ -1177,7 +1172,7 @@ def get_parser() -> tuple:
     tree_sp = subparsers.add_parser('tree', aliases=['t'],
                                     help='[+] print directory tree [offline operation]')
     tree_sp.add_argument('--include-trash', '-t', action='store_true')
-    tree_sp.add_argument('node', nargs='?', default=None, help='root folder for the tree')
+    tree_sp.add_argument('node', nargs='?', default='/', help='root folder for the tree')
     tree_sp.set_defaults(func=tree_action)
 
     list_c_sp = subparsers.add_parser('children', aliases=['ls', 'dir'],
@@ -1235,7 +1230,7 @@ def get_parser() -> tuple:
     upload_sp.add_argument('--remove-source-files', '-rsf', action='store_true',
                            help='remove local files on successful upload')
     upload_sp.add_argument('path', nargs='+', help='a path to a local file or directory')
-    upload_sp.add_argument('parent', help='remote parent folder')
+    upload_sp.add_argument('parent', default='/', help='remote parent folder')
     upload_sp.set_defaults(func=upload_action)
 
     overwrite_sp = subparsers.add_parser('overwrite', aliases=['ov'], help=
@@ -1363,10 +1358,6 @@ def get_parser() -> tuple:
     dn_sp = subparsers.add_parser('init', aliases=['i'], add_help=False)
     dn_sp.set_defaults(func=None)
 
-    # dump sql database creation sequence to stdout
-    dmp_sp = subparsers.add_parser('dumpsql', add_help=False)
-    dmp_sp.set_defaults(func=dump_sql_action)
-
     return opt_parser, subparsers
 
 
@@ -1414,9 +1405,11 @@ def main():
         except:
             raise
             sys.exit(INIT_FAILED_RETVAL)
-        if args.func not in [sync_action, old_sync_action, dump_sql_action]:
+
+        if args.func not in [sync_action, old_sync_action, clear_action]:
             if not check_cache():
-                sys.exit(INIT_FAILED_RETVAL)
+                 sys.exit(INIT_FAILED_RETVAL)
+            pass
 
     args.__setattr__('acd_client', acd_client)
     args.__setattr__('cache', cache)
