@@ -69,7 +69,7 @@ def color_status(status):
 
 
 def date_str(time_: datetime.datetime) -> str:
-    """Creates colored date string similar to ls -l."""
+    """Creates colored date string similar to the one in ls -l."""
     if time_.year == datetime.date.year:
         last_seg = str(time_.year).rjust(5)
     else:
@@ -90,11 +90,29 @@ class FormatterMixin(object):
             return nor_fmt % str(self.num_children(node.id)).rjust(7 if not size_bytes else 11)
         return ''
 
-    def ls_format(self, folder_id, folder_path,
-                  recursive=False, trash=False, long=False, size_bytes=False) -> 'Generator[str]':
+    def ls_format(self, folder_id, folder_path=None, recursive=False,
+                  trash_only=False, trashed_children=False,
+                  long=False, size_bytes=False) -> 'Generator[str]':
 
-        # node = self.get_node(folder_id)
-        folders, files = self.list_children(folder_id, trash)
+        if folder_path is None:
+            folder_path = []
+
+        if trash_only:
+            folders, files = self.list_trashed_children(folder_id)
+        else:
+            folders, files = self.list_children(folder_id, trashed_children)
+
+        for file in files:
+            yield '[{}] [{}] {}{}{}'.format(
+                nor_fmt % file.id,
+                color_status(file.status),
+                (self.size_nlink_str(file, size_bytes=size_bytes) + ' ') if long else '',
+                (date_str(file.modified) + ' ') if long else '',
+                color_path(file.name)
+            )
+
+        if recursive and files and folders:
+            yield ''
 
         is_first = True
         for folder in folders:
@@ -106,26 +124,17 @@ class FormatterMixin(object):
                 color_status(folder.status),
                 (self.size_nlink_str(folder, size_bytes=size_bytes) + ' ') if long else '',
                 (date_str(folder.modified) + ' ') if long else '',
-                color_path(folder_path + '/') if folder_path else '',
+                color_path('/'.join(folder_path) + '/') if folder_path else '',
                 color_path(folder.name + '/')
             )
             is_first = False
 
             if recursive:
                 for n in self.ls_format(folder.id,
-                                        ((folder_path + '/') if folder_path else '') + folder.name,
-                                        recursive, long, size_bytes):
+                                        [f for f in folder_path] + [folder.name],
+                                        recursive, False, trashed_children, long, size_bytes):
                     yield n
 
-        for file in files:
-            yield '[{}] [{}] {}{}{}{}'.format(
-                nor_fmt % file.id,
-                color_status(file.status),
-                (self.size_nlink_str(file, size_bytes=size_bytes) + ' ') if long else '',
-                (date_str(file.modified) + ' ') if long else '',
-                color_path(folder_path + '/') if folder_path else '',
-                color_path(file.name)
-            )
 
     def tree_format(self, node, path, trash=False, depth=0) -> 'Generator[str]':
         """A simple tree formatter that indicates parentship by indentation

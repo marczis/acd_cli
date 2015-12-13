@@ -472,10 +472,10 @@ def create_dl_jobs(node_id: str, local_path: str, preserve_mtime: bool,
     local_path = local_path if local_path else ''
 
     node = cache.get_node(node_id)
-    if not node.is_available():
+    if not node.is_available:
         return 0
 
-    if node.is_folder():
+    if node.is_folder:
         return traverse_dl_folder(node_id, local_path, preserve_mtime, exclude, jobs)
 
     loc_name = node.name
@@ -521,7 +521,7 @@ def traverse_dl_folder(node_id: str, local_path: str, preserve_mtime: bool,
         return ERR_CR_FOLDER
 
     ret_val = 0
-    children = sorted(node.children)
+    children = sorted(cache.list_children(node.id))
     for child in children:
         ret_val |= create_dl_jobs(child.id, curr_path, preserve_mtime, exclude, jobs)
     return ret_val
@@ -815,8 +815,8 @@ def create_action(args: argparse.Namespace) -> int:
 @no_autores_trash_action
 @offline_action
 def list_trash_action(args: argparse.Namespace):
-    t_list = cache.list_trash(args.recursive)
-    for node in format.ListFormatter(t_list, recursive=args.recursive):
+    for node in cache.ls_format(cache.get_root_node().id, [], recursive=args.recursive,
+                                trash_only=True, trashed_children=True):
         print(node)
 
 
@@ -883,8 +883,8 @@ def find_regex_action(args: argparse.Namespace) -> int:
 
 @offline_action
 def children_action(args: argparse.Namespace) -> int:
-    for entry in cache.ls_format(args.node, '', args.recursive, args.include_trash,
-                                 args.long, args.size_bytes):
+    for entry in cache.ls_format(args.node, [], args.recursive,
+                                 False, args.include_trash, args.long, args.size_bytes):
         print(entry)
 
 

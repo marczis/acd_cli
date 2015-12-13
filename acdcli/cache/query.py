@@ -234,6 +234,7 @@ class QueryMixin(object):
     def list_children(self, folder_id, trash=False) -> 'Tuple[List[Node], List[Node]]':
         files = []
         folders = []
+
         with cursor(self._conn) as c:
             c.execute(CHILDREN_SQL, [folder_id])
             node = c.fetchone()
@@ -246,6 +247,12 @@ class QueryMixin(object):
                         folders.append(node)
                 node = c.fetchone()
 
+        return folders, files
+
+    def list_trashed_children(self, folder_id) -> 'Tuple[List[Node], List[Node]]':
+        folders, files = self.list_children(folder_id, True)
+        folders[:] = [f for f in folders if f.is_trashed]
+        files[:] = [f for f in folders if f.is_trashed]
         return folders, files
 
     def first_path(self, node_id: str) -> str:
