@@ -231,6 +231,15 @@ class QueryMixin(object):
             num = c.fetchone()[0]
             return num
 
+    def get_child(self, folder_id, child_name) -> 'Union[Node|None]':
+        with cursor(self._conn) as c:
+            c.execute(CHILD_OF_SQL, [child_name, folder_id])
+            r = c.fetchone()
+        if r:
+            r = Node(r)
+            if r.is_available:
+                return r
+
     def list_children(self, folder_id, trash=False) -> 'Tuple[List[Node], List[Node]]':
         files = []
         folders = []
@@ -256,6 +265,8 @@ class QueryMixin(object):
         return folders, files
 
     def first_path(self, node_id: str) -> str:
+        if node_id == self.root_id:
+            return '/'
         with cursor(self._conn) as c:
             c.execute(FIND_FIRST_PARENT_SQL, (node_id,))
             r = c.fetchone()

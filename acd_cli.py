@@ -289,7 +289,7 @@ def traverse_ul_dir(dirs: list, directory: str, parent_id: str, overwr: bool, fo
     real_path = os.path.realpath(directory)
     short_nm = os.path.basename(real_path)
 
-    curr_node = parent.get_child(short_nm)
+    curr_node = cache.get_child(parent_id, short_nm)
     if not curr_node or not curr_node.is_available or not parent.is_available:
         try:
             r = acd_client.create_folder(short_nm, parent_id)
@@ -445,7 +445,7 @@ def upload_stream(stream, file_name, parent_id, overwr=False, dedup=False,
     hasher = hashing.IncrementalHasher()
 
     parent = cache.get_node(parent_id)
-    child = parent.get_child(file_name)
+    child = cache.get_child(file_name)
 
     try:
         if child and overwr:
@@ -793,7 +793,7 @@ def create_action(args: argparse.Namespace) -> int:
 
     for s in segments[:-1]:
         cur_path += s + '/'
-        child = parent.get_child(s)
+        child = cache.get_child(parent.id, s)
 
         if child:
             parent = child
@@ -806,7 +806,7 @@ def create_action(args: argparse.Namespace) -> int:
         if not mkdir(parent, s):
             return ERR_CR_FOLDER
 
-        parent = parent.get_child(s)
+        parent = cache.get_child(parent.id, s)
 
     if not mkdir(parent, segments[-1]):
         return ERR_CR_FOLDER
