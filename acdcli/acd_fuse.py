@@ -563,7 +563,7 @@ class ACDFuse(LoggingMixIn, Operations):
                 raise FuseOSError(errno.EEXIST)
 
         if new_bn != old_bn:
-            self._rename(id, new_bn)
+            self._rename(node.id, new_bn)
 
         if new_dn != old_dn:
             # odir_id = self.cache.resolve_path(old_dn, False)

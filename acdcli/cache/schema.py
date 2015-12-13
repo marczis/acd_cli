@@ -71,8 +71,8 @@ def _0_to_1(conn):
 
 def _1_to_2(conn):
     conn.executescript(
-        'DROP TABLE folders;'
-        'CREATE INDEX ix_nodes_names ON nodes(name);'
+        'DROP TABLE IF EXISTS folders;'
+        'CREATE INDEX IF NOT EXISTS ix_nodes_names ON nodes(name);'
         'REINDEX;'
         'PRAGMA user_version = 2;'
     )
